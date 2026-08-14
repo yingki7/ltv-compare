@@ -34,7 +34,7 @@ with st.sidebar:
     st.markdown("""
     **📌 数据格式要求：**
     - CSV文件
-    - 必须包含列：`weidu`(国家), `new_user`(新增用户)
+    - BI报表上下载LTV数据，必须包含列：`weidu`(国家), `new_user`(新增用户)
     - LTV列：`ltv01`, `ltv07`, `ltv14` 等
     """)
 
@@ -493,14 +493,12 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                     styled_buffer = io.BytesIO(f.read())
                 
                 st.download_button(
-                    label="📥 下载Excel报告 (已美化)",
+                    label="📥 下载",
                     data=styled_buffer,
                     file_name=f"{game_name}_LTV_Comparison.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-                
-                st.info("💡 Excel报告已自动美化：表头蓝色、正负颜色标注、自动列宽")
         
         except Exception as e:
             st.error(f"❌ 分析失败: {str(e)}")
