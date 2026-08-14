@@ -1,19 +1,14 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 import io
 import re
-from openpyxl import load_workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
 
 # 设置页面
 st.set_page_config(page_title="LTV版本对比工具", layout="wide")
-
-# 设置中文字体（防止图表中文乱码）
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'SimHei']
-plt.rcParams['axes.unicode_minus'] = False
 
 st.title("🎮 LTV版本对比分析工具")
 st.markdown("上传两个版本的Global LTV数据，自动分析收益前5国家的LTV表现")
@@ -136,55 +131,106 @@ def create_global_summary(df_a, df_b, version_a, version_b, ltv_cols):
     
     return pd.DataFrame([summary])
 
-def generate_plot(df_compare, version_a, version_b, ltv_cols, title):
-    """生成LTV对比图"""
+def create_ltv_bar_chart(df_compare, version_a, version_b, ltv_cols, title):
+    """使用Plotly创建LTV对比柱状图"""
     countries = df_compare['国家'].tolist()
-    n_countries = len(countries)
+    n_metrics = len(ltv_cols)
     
-    fig, axes = plt.subplots(1, len(ltv_cols), figsize=(6 * len(ltv_cols), 6))
-    if len(ltv_cols) == 1:
-        axes = [axes]
+    if n_metrics == 0:
+        return None
     
-    x = np.arange(n_countries)
-    width = 0.35
+    # 创建子图
+    fig = make_subplots(rows=1, cols=n_metrics, 
+                        subplot_titles=[f'{col.upper()}' for col in ltv_cols],
+                        shared_yaxes=False)
     
-    for idx, ltv_col in enumerate(ltv_cols):
-        ax = axes[idx]
-        
-        # 将列名映射到实际数据
+    colors_a = '#2E86AB'
+    colors_b = '#E84855'
+    
+    for idx, ltv_col in enumerate(ltv_cols, 1):
         col_a = f'{version_a}_{ltv_col}'
         col_b = f'{version_b}_{ltv_col}'
         
         if col_a not in df_compare.columns or col_b not in df_compare.columns:
             continue
         
-        val_a = df_compare[col_a].values
-        val_b = df_compare[col_b].values
+        fig.add_trace(
+            go.Bar(name=version_a, x=countries, y=df_compare[col_a],
+                   marker_color=colors_a, text=df_compare[col_a].round(4),
+                   textposition='outside', textfont=dict(size=10)),
+            row=1, col=idx
+        )
         
-        bars1 = ax.bar(x - width/2, val_a, width, label=version_a, color='#2E86AB')
-        bars2 = ax.bar(x + width/2, val_b, width, label=version_b, color='#E84855')
+        fig.add_trace(
+            go.Bar(name=version_b, x=countries, y=df_compare[col_b],
+                   marker_color=colors_b, text=df_compare[col_b].round(4),
+                   textposition='outside', textfont=dict(size=10)),
+            row=1, col=idx
+        )
         
-        # 添加数值标签
-        for bar in bars1:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(f'{height:.3f}', xy=(bar.get_x() + bar.get_width()/2, height),
-                           xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8)
-        for bar in bars2:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(f'{height:.3f}', xy=(bar.get_x() + bar.get_width()/2, height),
-                           xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8)
-        
-        ax.set_xlabel('Country', fontsize=12)
-        ax.set_ylabel(ltv_col.upper(), fontsize=12)
-        ax.set_title(f'{title} - {ltv_col.upper()}', fontsize=14, fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(countries, rotation=45, ha='right')
-        ax.legend(fontsize=11)
-        ax.grid(True, alpha=0.3, axis='y')
+        fig.update_xaxes(title_text="Country", tickangle=45, row=1, col=idx)
+        fig.update_yaxes(title_text=ltv_col.upper(), row=1, col=idx)
     
-    plt.tight_layout()
+    fig.update_layout(
+        title_text=title,
+        height=500,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        bargap=0.15
+    )
+    
+    return fig
+
+def create_daily_trend_chart(df_a, df_b, country, version_a, version_b, ltv_cols):
+    """使用Plotly创建每日趋势图"""
+    if len(ltv_cols) == 0:
+        return None
+    
+    fig = make_subplots(rows=1, cols=len(ltv_cols), 
+                        subplot_titles=[f'{col.upper()} Trend' for col in ltv_cols],
+                        shared_yaxes=False)
+    
+    country_df_a = df_a[df_a['weidu'] == country]
+    country_df_b = df_b[df_b['weidu'] == country]
+    
+    colors_a = '#2E86AB'
+    colors_b = '#E84855'
+    
+    for idx, ltv_col in enumerate(ltv_cols, 1):
+        # 版本A
+        if 'first_open_date_day' in country_df_a.columns and ltv_col in country_df_a.columns:
+            daily_a = country_df_a.groupby('first_open_date_day')[ltv_col].mean().reset_index()
+            if len(daily_a) > 0:
+                fig.add_trace(
+                    go.Scatter(x=daily_a['first_open_date_day'], y=daily_a[ltv_col],
+                              mode='lines+markers', name=version_a,
+                              marker=dict(size=8, color=colors_a),
+                              line=dict(width=2, color=colors_a)),
+                    row=1, col=idx
+                )
+        
+        # 版本B
+        if 'first_open_date_day' in country_df_b.columns and ltv_col in country_df_b.columns:
+            daily_b = country_df_b.groupby('first_open_date_day')[ltv_col].mean().reset_index()
+            if len(daily_b) > 0:
+                fig.add_trace(
+                    go.Scatter(x=daily_b['first_open_date_day'], y=daily_b[ltv_col],
+                              mode='lines+markers', name=version_b,
+                              marker=dict(size=8, color=colors_b),
+                              line=dict(width=2, color=colors_b)),
+                    row=1, col=idx
+                )
+        
+        fig.update_xaxes(title_text="Date", row=1, col=idx)
+        fig.update_yaxes(title_text=ltv_col.upper(), row=1, col=idx)
+    
+    fig.update_layout(
+        title_text=f'{country} - Daily LTV Trend',
+        height=450,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
     return fig
 
 # ==================== 主界面 ====================
@@ -248,11 +294,11 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                 
                 st.dataframe(display_df, use_container_width=True)
                 
-                st.markdown("""
-                **📌 颜色说明：**
-                - 🟢 绿色：变化率为正（表现提升）
-                - 🔴 红色：变化率为负（表现下降）
-                """)
+                # 柱状图
+                fig = create_ltv_bar_chart(df_compare, version_a, version_b, ltv_cols, 
+                                          f"Top {top_n} Countries LTV Comparison")
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
             
             with tab2:
                 st.subheader("🌍 全球汇总")
@@ -267,46 +313,16 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                 st.dataframe(display_global, use_container_width=True)
             
             with tab3:
-                st.subheader("📈 LTV趋势对比图")
+                st.subheader("📈 各国每日LTV趋势")
                 
-                fig = generate_plot(df_compare, version_a, version_b, ltv_cols, "Top Countries")
-                st.pyplot(fig)
-                plt.close(fig)
-                
-                # 各国每日趋势
                 if len(countries) > 0:
-                    st.subheader("📈 各国每日LTV趋势")
                     country_select = st.selectbox("选择国家查看趋势", countries)
                     
                     if country_select:
-                        fig2, axes2 = plt.subplots(1, len(ltv_cols), figsize=(6 * len(ltv_cols), 4))
-                        if len(ltv_cols) == 1:
-                            axes2 = [axes2]
-                        
-                        country_df_a = df_a[df_a['weidu'] == country_select]
-                        country_df_b = df_b[df_b['weidu'] == country_select]
-                        
-                        for idx, ltv_col in enumerate(ltv_cols):
-                            ax = axes2[idx]
-                            if 'first_open_date_day' in country_df_a.columns:
-                                daily_a = country_df_a.groupby('first_open_date_day')[ltv_col].mean()
-                                if len(daily_a) > 0:
-                                    ax.plot(daily_a.index, daily_a.values, 'o-', label=version_a, color='#2E86AB')
-                            if 'first_open_date_day' in country_df_b.columns:
-                                daily_b = country_df_b.groupby('first_open_date_day')[ltv_col].mean()
-                                if len(daily_b) > 0:
-                                    ax.plot(daily_b.index, daily_b.values, 's-', label=version_b, color='#E84855')
-                            
-                            ax.set_xlabel('Date')
-                            ax.set_ylabel(ltv_col.upper())
-                            ax.set_title(f'{country_select} - {ltv_col.upper()}')
-                            ax.legend()
-                            ax.grid(True, alpha=0.3)
-                            ax.tick_params(axis='x', rotation=45)
-                        
-                        plt.tight_layout()
-                        st.pyplot(fig2)
-                        plt.close(fig2)
+                        fig = create_daily_trend_chart(df_a, df_b, country_select, 
+                                                       version_a, version_b, ltv_cols)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
             
             with tab4:
                 st.subheader("📥 下载报告")
@@ -331,14 +347,16 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                             if 'new_user' in country_df_a.columns:
                                 agg_dict['new_user'] = 'sum'
                             daily_a = country_df_a.groupby('first_open_date_day').agg(agg_dict).reset_index()
-                            daily_a['版本'] = version_a
+                            if not daily_a.empty:
+                                daily_a['版本'] = version_a
                         
                         if len(country_df_b) > 0 and 'first_open_date_day' in country_df_b.columns:
                             agg_dict = {col: 'mean' for col in ltv_cols if col in country_df_b.columns}
                             if 'new_user' in country_df_b.columns:
                                 agg_dict['new_user'] = 'sum'
                             daily_b = country_df_b.groupby('first_open_date_day').agg(agg_dict).reset_index()
-                            daily_b['版本'] = version_b
+                            if not daily_b.empty:
+                                daily_b['版本'] = version_b
                         
                         if not daily_a.empty or not daily_b.empty:
                             daily_combined = pd.concat([daily_a, daily_b], ignore_index=True)
@@ -352,21 +370,6 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                     data=excel_buffer,
                     file_name=f"{game_name}_LTV_Comparison.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-                
-                # 下载图表
-                fig_buffer = io.BytesIO()
-                fig = generate_plot(df_compare, version_a, version_b, ltv_cols, "Top Countries")
-                fig.savefig(fig_buffer, dpi=300, bbox_inches='tight')
-                fig_buffer.seek(0)
-                plt.close(fig)
-                
-                st.download_button(
-                    label="📊 下载图表PNG",
-                    data=fig_buffer,
-                    file_name=f"{game_name}_LTV_Charts.png",
-                    mime="image/png",
                     use_container_width=True
                 )
         
