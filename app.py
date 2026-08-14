@@ -13,7 +13,7 @@ from openpyxl.utils import get_column_letter
 # 设置页面
 st.set_page_config(page_title="LTV版本对比工具", layout="wide")
 
-st.title("🎮 LTV版本对比分析工具")
+st.title("📊 LTV版本对比分析工具")
 st.markdown("上传两个版本的Global LTV数据，自动分析收益前N国家的LTV表现")
 
 # ==================== 侧边栏配置 ====================
@@ -33,8 +33,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("""
     **📌 数据格式要求：**
+    - BI报表上下载LTV数据
     - CSV文件
-    - BI报表上下载LTV数据，必须包含列：`weidu`(国家), `new_user`(新增用户)
+    - 必须包含列：`weidu`(国家), `new_user`(新增用户)
     - LTV列：`ltv01`, `ltv07`, `ltv14` 等
     """)
 
