@@ -6,6 +6,10 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import io
 import re
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 # 设置页面
 st.set_page_config(page_title="LTV版本对比工具", layout="wide")
@@ -13,25 +17,141 @@ st.set_page_config(page_title="LTV版本对比工具", layout="wide")
 st.title("🎮 LTV版本对比分析工具")
 st.markdown("上传两个版本的Global LTV数据，自动分析收益前5国家的LTV表现")
 
-# ==================== 侧边栏配置 ====================
-with st.sidebar:
-    st.header("⚙️ 配置")
+# ==================== Excel美化函数 ====================
+def apply_excel_style(filepath):
+    """应用Excel样式美化"""
+    wb = load_workbook(filepath)
     
-    selected_ltvs = st.multiselect(
-        "选择要分析的LTV指标",
-        options=['LTV1', 'LTV7', 'LTV14', 'LTV30'],
-        default=['LTV1', 'LTV7', 'LTV14']
+    # ---------- 颜色定义 ----------
+    # 表头
+    header_font = Font(name='微软雅黑', size=11, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='2E86AB', end_color='2E86AB', fill_type='solid')
+    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    
+    # 数据
+    data_font = Font(name='微软雅黑', size=10)
+    data_alignment_center = Alignment(horizontal='center', vertical='center')
+    data_alignment_right = Alignment(horizontal='right', vertical='center')
+    data_alignment_left = Alignment(horizontal='left', vertical='center')
+    
+    # 边框
+    thin_border = Border(
+        left=Side(style='thin', color='D0D0D0'),
+        right=Side(style='thin', color='D0D0D0'),
+        top=Side(style='thin', color='D0D0D0'),
+        bottom=Side(style='thin', color='D0D0D0')
     )
     
-    top_n = st.slider("显示Top N国家", min_value=3, max_value=10, value=5)
+    # 正负颜色
+    positive_fill = PatternFill(start_color='D5F5E3', end_color='D5F5E3', fill_type='solid')
+    negative_fill = PatternFill(start_color='FADBD8', end_color='FADBD8', fill_type='solid')
+    positive_font = Font(name='微软雅黑', size=10, color='1A7A3A', bold=True)
+    negative_font = Font(name='微软雅黑', size=10, color='C0392B', bold=True)
     
-    st.markdown("---")
-    st.markdown("""
-    **📌 数据格式要求：**
-    - CSV文件
-    - 必须包含列：`weidu`(国家), `new_user`(新增用户)
-    - LTV列：`ltv01`, `ltv07`, `ltv14` 等
-    """)
+    # 交替行颜色
+    even_fill = PatternFill(start_color='F8F9FA', end_color='F8F9FA', fill_type='solid')
+    odd_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+    
+    # 国家名称加粗
+    country_font = Font(name='微软雅黑', size=10, bold=True)
+    
+    # ---------- 处理每个Sheet ----------
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        
+        # 获取所有列名
+        headers = []
+        for col in range(1, ws.max_column + 1):
+            val = ws.cell(row=1, column=col).value
+            if val:
+                headers.append(val)
+        
+        # 识别变化列
+        change_cols = []
+        country_col = None
+        for idx, header in enumerate(headers, 1):
+            if header and '变化%' in str(header):
+                change_cols.append(idx)
+            if header == '国家':
+                country_col = idx
+        
+        # ---------- 设置表头 ----------
+        ws.row_dimensions[1].height = 30
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = thin_border
+        
+        # ---------- 设置数据行 ----------
+        for row_idx in range(2, ws.max_row + 1):
+            ws.row_dimensions[row_idx].height = 22
+            
+            # 交替行颜色
+            row_fill = even_fill if (row_idx - 2) % 2 == 1 else odd_fill
+            
+            for col_idx in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = data_font
+                cell.fill = row_fill
+                cell.border = thin_border
+                
+                # 国家列加粗
+                if country_col and col_idx == country_col:
+                    cell.font = country_font
+                    cell.alignment = data_alignment_left
+                    continue
+                
+                # 变化列特殊样式
+                if col_idx in change_cols:
+                    if isinstance(cell.value, (int, float)):
+                        if cell.value > 0:
+                            cell.font = positive_font
+                            cell.fill = positive_fill
+                            cell.value = f"+{cell.value:.2f}%"
+                        elif cell.value < 0:
+                            cell.font = negative_font
+                            cell.fill = negative_fill
+                            cell.value = f"{cell.value:.2f}%"
+                        else:
+                            cell.value = f"{cell.value:.2f}%"
+                        cell.alignment = data_alignment_center
+                    continue
+                
+                # 其他列对齐和格式
+                if isinstance(cell.value, (int, float)):
+                    cell.alignment = data_alignment_right
+                    # 根据列名格式化
+                    if '用户' in str(headers[col_idx-1]) or '用户' in str(cell.column):
+                        if cell.value >= 1000:
+                            cell.value = f"{int(cell.value):,}"
+                    elif 'LTV' in str(headers[col_idx-1]) or 'ltv' in str(headers[col_idx-1]).lower():
+                        cell.value = round(cell.value, 4)
+                    elif col_idx not in change_cols:
+                        # 其他数字保留4位小数
+                        if isinstance(cell.value, float):
+                            cell.value = round(cell.value, 4)
+                else:
+                    cell.alignment = data_alignment_center
+        
+        # ---------- 自动调整列宽 ----------
+        for col in ws.columns:
+            max_length = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value is not None:
+                    try:
+                        val_len = len(str(cell.value))
+                        if val_len > max_length:
+                            max_length = val_len
+                    except:
+                        pass
+            adjusted_width = min(max(max_length + 4, 14), 35)
+            ws.column_dimensions[col_letter].width = adjusted_width
+    
+    wb.save(filepath)
+    return filepath
 
 # ==================== 核心函数 ====================
 def load_and_clean(file):
@@ -47,7 +167,6 @@ def load_and_clean(file):
     df = df.replace('', np.nan)
     df = df.replace(' ', np.nan)
     
-    # 转换数值列
     numeric_cols = ['new_user', 'rev00', 'dav00', 'ltv00', 'rev01', 'dav01', 'ltv01', 
                     'rev03', 'dav03', 'ltv03', 'rev07', 'dav07', 'ltv07', 'rev14', 'dav14', 'ltv14',
                     'rev30', 'dav30', 'ltv30']
@@ -139,7 +258,6 @@ def create_ltv_bar_chart(df_compare, version_a, version_b, ltv_cols, title):
     if n_metrics == 0:
         return None
     
-    # 创建子图
     fig = make_subplots(rows=1, cols=n_metrics, 
                         subplot_titles=[f'{col.upper()}' for col in ltv_cols],
                         shared_yaxes=False)
@@ -197,7 +315,6 @@ def create_daily_trend_chart(df_a, df_b, country, version_a, version_b, ltv_cols
     colors_b = '#E84855'
     
     for idx, ltv_col in enumerate(ltv_cols, 1):
-        # 版本A
         if 'first_open_date_day' in country_df_a.columns and ltv_col in country_df_a.columns:
             daily_a = country_df_a.groupby('first_open_date_day')[ltv_col].mean().reset_index()
             if len(daily_a) > 0:
@@ -209,7 +326,6 @@ def create_daily_trend_chart(df_a, df_b, country, version_a, version_b, ltv_cols
                     row=1, col=idx
                 )
         
-        # 版本B
         if 'first_open_date_day' in country_df_b.columns and ltv_col in country_df_b.columns:
             daily_b = country_df_b.groupby('first_open_date_day')[ltv_col].mean().reset_index()
             if len(daily_b) > 0:
@@ -253,11 +369,9 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
     
     with st.spinner("🔄 正在分析数据..."):
         try:
-            # 加载数据
             df_a = load_and_clean(file_a)
             df_b = load_and_clean(file_b)
             
-            # 获取LTV列
             ltv_cols = [col for col in ['ltv01', 'ltv07', 'ltv14', 'ltv30'] 
                        if col in df_a.columns and col in df_b.columns]
             
@@ -265,19 +379,16 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                 st.error("❌ 数据中找不到LTV列 (ltv01, ltv07, ltv14, ltv30)")
                 st.stop()
             
-            # 获取Top N国家
             countries = get_top_countries(df_a, top_n)
             if not countries:
                 st.error("❌ 无法计算收益排名，请确认数据包含 'rev00' 或 'ltv01' 列")
                 st.stop()
             
-            # 创建对比数据
             df_compare = create_ltv_comparison(df_a, df_b, countries, version_a, version_b, ltv_cols)
             df_global = create_global_summary(df_a, df_b, version_a, version_b, ltv_cols)
             
             st.success(f"✅ 分析完成！Top {top_n} 国家: {', '.join(countries)}")
             
-            # Tab显示
             tab1, tab2, tab3, tab4 = st.tabs(["📊 国家LTV对比", "🌍 全球汇总", "📈 趋势图表", "📥 下载报告"])
             
             with tab1:
@@ -294,7 +405,6 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                 
                 st.dataframe(display_df, use_container_width=True)
                 
-                # 柱状图
                 fig = create_ltv_bar_chart(df_compare, version_a, version_b, ltv_cols, 
                                           f"Top {top_n} Countries LTV Comparison")
                 if fig:
@@ -327,7 +437,6 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
             with tab4:
                 st.subheader("📥 下载报告")
                 
-                # 生成Excel
                 excel_buffer = io.BytesIO()
                 game_name = "Game"
                 
@@ -363,15 +472,28 @@ if st.button("🚀 开始分析", type="primary", use_container_width=True):
                             sheet_name = re.sub(r'[\\/*?:"<>|]', '', country)[:31]
                             daily_combined.to_excel(writer, sheet_name=sheet_name, index=False)
                 
+                # 应用样式美化
                 excel_buffer.seek(0)
+                temp_path = "/tmp/temp_lvt_report.xlsx"
+                with open(temp_path, "wb") as f:
+                    f.write(excel_buffer.getvalue())
+                
+                # 美化Excel
+                apply_excel_style(temp_path)
+                
+                # 读取美化后的文件
+                with open(temp_path, "rb") as f:
+                    styled_buffer = io.BytesIO(f.read())
                 
                 st.download_button(
-                    label="📥 下载Excel报告",
-                    data=excel_buffer,
+                    label="📥 下载Excel报告 (已美化)",
+                    data=styled_buffer,
                     file_name=f"{game_name}_LTV_Comparison.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
+                
+                st.info("💡 Excel报告已自动美化：表头蓝色、正负颜色标注、自动列宽")
         
         except Exception as e:
             st.error(f"❌ 分析失败: {str(e)}")
